@@ -83,12 +83,20 @@ export class ObjectCodec {
     this._encodeMemo = new Map();
     this._encodeCounter = 0;
     this._needsId = new Set();
+    this._allDefinitions = new Map(); // Track all definitions by ID
 
     // First pass: identify which objects need IDs (referenced multiple times or circularly)
     this._findObjectsNeedingIds(obj);
 
     // Encode the object
     const link = this._encodeValue(obj);
+
+    // If we have definitions (objects with IDs), output them as separate links
+    if (this._allDefinitions.size > 0) {
+      // Format each definition separately and join with newlines
+      const formattedLinks = Array.from(this._allDefinitions.values()).map(defn => defn.format());
+      return formattedLinks.join('\n');
+    }
 
     // Return formatted link
     return link.format();
@@ -102,10 +110,19 @@ export class ObjectCodec {
   decode(notation) {
     // Reset memo for each decode operation
     this._decodeMemo = new Map();
+    this._allLinks = [];
 
     const links = this.parser.parse(notation);
     if (!links || links.length === 0) {
       return null;
+    }
+
+    // If there are multiple links, store them all for forward reference resolution
+    if (links.length > 1) {
+      this._allLinks = links;
+      // Decode the first link (this will be the main result)
+      // Forward references will be resolved automatically
+      return this._decodeLink(links[0]);
     }
 
     let link = links[0];
@@ -209,7 +226,11 @@ export class ObjectCodec {
       // If this array has an ID, use self-reference format: (obj_id: array item1 item2 ...)
       if (this._encodeMemo.has(obj)) {
         const refId = this._encodeMemo.get(obj);
-        return new Link(refId, [new Link(ObjectCodec.TYPE_ARRAY), ...parts]);
+        const definition = new Link(refId, [new Link(ObjectCodec.TYPE_ARRAY), ...parts]);
+        // Store definition (will override if already exists with updated content)
+        this._allDefinitions.set(refId, definition);
+        // Return just a reference
+        return new Link(refId);
       } else {
         // Wrap in a type marker for arrays without IDs: (array item1 item2 ...)
         return new Link(undefined, [new Link(ObjectCodec.TYPE_ARRAY), ...parts]);
@@ -229,7 +250,11 @@ export class ObjectCodec {
       // If this object has an ID, use self-reference format: (obj_id: object (key val) ...)
       if (this._encodeMemo.has(obj)) {
         const refId = this._encodeMemo.get(obj);
-        return new Link(refId, [new Link(ObjectCodec.TYPE_OBJECT), ...parts]);
+        const definition = new Link(refId, [new Link(ObjectCodec.TYPE_OBJECT), ...parts]);
+        // Store definition (will override if already exists with updated content)
+        this._allDefinitions.set(refId, definition);
+        // Return just a reference
+        return new Link(refId);
       } else {
         // Wrap in a type marker for objects without IDs: (object (key val) ...)
         return new Link(undefined, [new Link(ObjectCodec.TYPE_OBJECT), ...parts]);
@@ -259,9 +284,17 @@ export class ObjectCodec {
           return this._decodeMemo.get(link.id);
         }
 
-        // If it starts with obj_, it's an empty collection
-        if (link.id.startsWith('obj_')) {
-          // Create empty array (we'll assume array for now; object would have pairs)
+        // If it starts with obj_, check if we have a forward reference in _allLinks
+        if (link.id.startsWith('obj_') && this._allLinks.length > 0) {
+          // Look for this ID in the remaining links
+          for (const otherLink of this._allLinks) {
+            if (otherLink.id === link.id) {
+              // Found it! Decode it now
+              return this._decodeLink(otherLink);
+            }
+          }
+
+          // Not found in links - create empty array as fallback
           const result = [];
           this._decodeMemo.set(link.id, result);
           return result;
