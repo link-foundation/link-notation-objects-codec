@@ -303,6 +303,9 @@ class ObjectCodec:
         self_ref_id = None
         if link.id and link.id.startswith('obj_'):
             self_ref_id = link.id
+            # If this is a back-reference (already in memo), return it
+            if self_ref_id in self._decode_memo:
+                return self._decode_memo[self_ref_id]
 
         # Get the type marker from the first value
         first_value = link.values[0]
