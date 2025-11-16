@@ -83,20 +83,12 @@ export class ObjectCodec {
     this._encodeMemo = new Map();
     this._encodeCounter = 0;
     this._needsId = new Set();
-    this._allDefinitions = new Map(); // Track all definitions by ID
 
     // First pass: identify which objects need IDs (referenced multiple times or circularly)
     this._findObjectsNeedingIds(obj);
 
     // Encode the object
     const link = this._encodeValue(obj);
-
-    // If we have definitions (objects with IDs), output them as separate links
-    if (this._allDefinitions.size > 0) {
-      // Format each definition separately and join with newlines
-      const formattedLinks = Array.from(this._allDefinitions.values()).map(defn => defn.format());
-      return formattedLinks.join('\n');
-    }
 
     // Return formatted link
     return link.format();
@@ -226,11 +218,8 @@ export class ObjectCodec {
       // If this array has an ID, use self-reference format: (obj_id: array item1 item2 ...)
       if (this._encodeMemo.has(obj)) {
         const refId = this._encodeMemo.get(obj);
-        const definition = new Link(refId, [new Link(ObjectCodec.TYPE_ARRAY), ...parts]);
-        // Store definition (will override if already exists with updated content)
-        this._allDefinitions.set(refId, definition);
-        // Return just a reference
-        return new Link(refId);
+        // Return the inline definition with self-reference ID
+        return new Link(refId, [new Link(ObjectCodec.TYPE_ARRAY), ...parts]);
       } else {
         // Wrap in a type marker for arrays without IDs: (array item1 item2 ...)
         return new Link(undefined, [new Link(ObjectCodec.TYPE_ARRAY), ...parts]);
@@ -250,11 +239,8 @@ export class ObjectCodec {
       // If this object has an ID, use self-reference format: (obj_id: object (key val) ...)
       if (this._encodeMemo.has(obj)) {
         const refId = this._encodeMemo.get(obj);
-        const definition = new Link(refId, [new Link(ObjectCodec.TYPE_OBJECT), ...parts]);
-        // Store definition (will override if already exists with updated content)
-        this._allDefinitions.set(refId, definition);
-        // Return just a reference
-        return new Link(refId);
+        // Return the inline definition with self-reference ID
+        return new Link(refId, [new Link(ObjectCodec.TYPE_OBJECT), ...parts]);
       } else {
         // Wrap in a type marker for objects without IDs: (object (key val) ...)
         return new Link(undefined, [new Link(ObjectCodec.TYPE_OBJECT), ...parts]);

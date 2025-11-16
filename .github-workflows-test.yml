@@ -1,0 +1,71 @@
+name: Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test-python:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.13']
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install dependencies
+      working-directory: ./python
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e ".[dev]"
+
+    - name: Run tests with coverage
+      working-directory: ./python
+      run: |
+        pytest tests/ -v --cov=link_notation_objects_codec --cov-report=term-missing
+
+    - name: Run linter (ruff)
+      working-directory: ./python
+      run: |
+        ruff check src/ tests/
+      continue-on-error: true
+
+    - name: Run type checker (mypy)
+      working-directory: ./python
+      run: |
+        mypy src/
+      continue-on-error: true
+
+  test-javascript:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: ['22']
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ matrix.node-version }}
+
+    - name: Install dependencies
+      working-directory: ./js
+      run: npm install
+
+    - name: Run tests
+      working-directory: ./js
+      run: npm test
+
+    - name: Run example
+      working-directory: ./js
+      run: npm run example

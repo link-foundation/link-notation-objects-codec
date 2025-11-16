@@ -105,19 +105,12 @@ class ObjectCodec:
         self._encode_memo = {}
         self._encode_counter = 0
         self._needs_id = set()
-        self._all_definitions: Dict[str, Link] = {}  # Track all definitions by ID
 
         # First pass: identify which objects need IDs (referenced multiple times or circularly)
         self._find_objects_needing_ids(obj)
 
         # Encode the object
         link = self._encode_value(obj, depth=0)
-
-        # If we have definitions (objects with IDs), output them as separate links
-        if self._all_definitions:
-            # Format each definition separately and join with newlines
-            formatted_links = [defn.format() for defn in self._all_definitions.values()]
-            return '\n'.join(formatted_links)
 
         # Return formatted link
         return link.format()
@@ -240,11 +233,8 @@ class ObjectCodec:
             # If this list has an ID, use self-reference format: (obj_id: list item1 item2 ...)
             if obj_id in self._encode_memo:
                 ref_id = self._encode_memo[obj_id]
-                definition = Link(link_id=ref_id, values=[Link(link_id=self.TYPE_LIST)] + parts)
-                # Store definition (will override if already exists with updated content)
-                self._all_definitions[ref_id] = definition
-                # Return just a reference
-                return Link(link_id=ref_id)
+                # Return the inline definition with self-reference ID
+                return Link(link_id=ref_id, values=[Link(link_id=self.TYPE_LIST)] + parts)
             else:
                 # Wrap in a type marker for lists without IDs: (list item1 item2 ...)
                 return Link(values=[Link(link_id=self.TYPE_LIST)] + parts)
@@ -261,11 +251,8 @@ class ObjectCodec:
             # If this dict has an ID, use self-reference format: (obj_id: dict (key val) ...)
             if obj_id in self._encode_memo:
                 ref_id = self._encode_memo[obj_id]
-                definition = Link(link_id=ref_id, values=[Link(link_id=self.TYPE_DICT)] + parts)
-                # Store definition (will override if already exists with updated content)
-                self._all_definitions[ref_id] = definition
-                # Return just a reference
-                return Link(link_id=ref_id)
+                # Return the inline definition with self-reference ID
+                return Link(link_id=ref_id, values=[Link(link_id=self.TYPE_DICT)] + parts)
             else:
                 # Wrap in a type marker for dicts without IDs: (dict (key val) ...)
                 return Link(values=[Link(link_id=self.TYPE_DICT)] + parts)
