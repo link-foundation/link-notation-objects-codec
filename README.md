@@ -142,10 +142,14 @@ console.log(JSON.stringify(decode(encode(data))) === JSON.stringify(data));
 
 The library uses the [links-notation](https://github.com/link-foundation/links-notation) format as the serialization target. Each object is encoded as a Link with type information:
 
-- Basic types are encoded with type markers: `(int 42)`, `(str "hello")`, `(bool True)`
+- Basic types are encoded with type markers: `(int 42)`, `(str aGVsbG8=)`, `(bool True)`
 - Strings are base64-encoded to handle special characters and newlines
-- Collections use built-in links notation self-references: `(obj_0: item1 item2 ...)`
-- Circular references use direct object ID references: `obj_0`
+- Collections with self-references use built-in links notation self-reference syntax:
+  - **Format**: `(obj_id: type content...)`
+  - **Python example**: `(obj_0: dict ((str c2VsZg==) obj_0))` for `{"self": obj}`
+  - **JavaScript example**: `(obj_0: array (int 1) (int 2) obj_0)` for self-referencing array
+- Simple collections without shared references use format: `(list item1 item2 ...)` or `(dict (key val) ...)`
+- Circular references use direct object ID references: `obj_0` (without the `ref` keyword)
 
 This approach allows for:
 - Universal representation of object graphs
