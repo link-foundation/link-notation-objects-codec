@@ -1,0 +1,33 @@
+{
+  "name": "link-notation-objects-codec",
+  "version": "0.1.0",
+  "description": "A library to encode/decode objects to/from links notation",
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "example": "node examples/basic_usage.js"
+  },
+  "keywords": [
+    "links-notation",
+    "serialization",
+    "codec",
+    "object-graph",
+    "circular-references"
+  ],
+  "author": "Link Foundation",
+  "license": "Unlicense",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/link-foundation/link-notation-objects-codec.git"
+  },
+  "dependencies": {
+    "links-notation": "^0.6.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
