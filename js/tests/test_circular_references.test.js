@@ -12,8 +12,8 @@ test('self-referencing array', () => {
   arr.push(arr); // Circular reference
 
   const encoded = encode(arr);
-  assert.ok(encoded);
-  assert.equal(typeof encoded, 'string');
+  // Verify correct Links Notation format with built-in self-reference syntax
+  assert.equal(encoded, '(obj_0: array (int 1) (int 2) (int 3) obj_0)');
 
   const decoded = decode(encoded);
   assert.ok(Array.isArray(decoded));
@@ -61,8 +61,12 @@ test('self-referencing object', () => {
   obj.self = obj; // Circular reference
 
   const encoded = encode(obj);
-  assert.ok(encoded);
-  assert.equal(typeof encoded, 'string');
+  // Verify correct Links Notation format with built-in self-reference syntax
+  // Note: JavaScript object key order may vary, so we check for both possible orders
+  const isValidFormat =
+    encoded === '(obj_0: object ((str bmFtZQ==) (str cm9vdA==)) ((str c2VsZg==) obj_0))' ||
+    encoded === '(obj_0: object ((str c2VsZg==) obj_0) ((str bmFtZQ==) (str cm9vdA==)))';
+  assert.ok(isValidFormat, `Expected valid self-reference format, got: ${encoded}`);
 
   const decoded = decode(encoded);
   assert.equal(typeof decoded, 'object');

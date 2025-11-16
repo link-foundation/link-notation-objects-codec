@@ -17,13 +17,14 @@ export class ObjectCodec {
   static TYPE_STR = 'str';
   static TYPE_ARRAY = 'array';
   static TYPE_OBJECT = 'object';
-  static TYPE_REF = 'ref';
 
   constructor() {
     this.parser = new Parser();
     // For tracking object identity during encoding
     this._encodeMemo = new Map();
     this._encodeCounter = 0;
+    // For tracking which objects need IDs (referenced multiple times or circularly)
+    this._needsId = new Set();
     // For tracking references during decoding
     this._decodeMemo = new Map();
   }
@@ -40,17 +41,56 @@ export class ObjectCodec {
   }
 
   /**
+   * First pass: identify which objects need IDs (referenced multiple times or circularly).
+   * @param {*} obj - The object to analyze
+   * @param {Map} seen - Map tracking how many times we've seen each object
+   */
+  _findObjectsNeedingIds(obj, seen = new Map()) {
+    // Only track mutable objects (arrays and objects)
+    if (obj === null || typeof obj !== 'object') {
+      return;
+    }
+
+    // If we've seen this object before, it needs an ID
+    if (seen.has(obj)) {
+      this._needsId.add(obj);
+      return; // Don't recurse again
+    }
+
+    // Mark as seen
+    seen.set(obj, 1);
+
+    // Recurse into structure
+    if (Array.isArray(obj)) {
+      for (const item of obj) {
+        this._findObjectsNeedingIds(item, seen);
+      }
+    } else if (typeof obj === 'object') {
+      for (const [key, value] of Object.entries(obj)) {
+        this._findObjectsNeedingIds(key, seen);
+        this._findObjectsNeedingIds(value, seen);
+      }
+    }
+  }
+
+  /**
    * Encode a JavaScript object to Links Notation format.
    * @param {*} obj - The JavaScript object to encode
    * @returns {string} String representation in Links Notation format
    */
   encode(obj) {
-    // Reset memo for each encode operation
+    // Reset state for each encode operation
     this._encodeMemo = new Map();
     this._encodeCounter = 0;
+    this._needsId = new Set();
 
+    // First pass: identify which objects need IDs (referenced multiple times or circularly)
+    this._findObjectsNeedingIds(obj);
+
+    // Encode the object
     const link = this._encodeValue(obj);
-    // Use the Link's format method directly
+
+    // Return formatted link
     return link.format();
   }
 
@@ -62,13 +102,32 @@ export class ObjectCodec {
   decode(notation) {
     // Reset memo for each decode operation
     this._decodeMemo = new Map();
+    this._allLinks = [];
 
     const links = this.parser.parse(notation);
     if (!links || links.length === 0) {
       return null;
     }
 
-    return this._decodeLink(links[0]);
+    // If there are multiple links, store them all for forward reference resolution
+    if (links.length > 1) {
+      this._allLinks = links;
+      // Decode the first link (this will be the main result)
+      // Forward references will be resolved automatically
+      return this._decodeLink(links[0]);
+    }
+
+    let link = links[0];
+
+    // Handle case where format() creates output like (obj_0) which parser wraps
+    // The parser returns a wrapper Link with no ID, containing the actual Link as first value
+    if (!link.id && link.values && link.values.length === 1 &&
+        link.values[0].id && link.values[0].id.startsWith('obj_')) {
+      // Extract the actual Link
+      link = link.values[0];
+    }
+
+    return this._decodeLink(link);
   }
 
   /**
@@ -82,31 +141,33 @@ export class ObjectCodec {
     // Only track objects and arrays (mutable types)
     if (obj !== null && (typeof obj === 'object')) {
       if (this._encodeMemo.has(obj)) {
-        // Return a reference to the previously encoded object
+        // Return a direct reference using the object's ID
         const refId = this._encodeMemo.get(obj);
-        return this._makeLink(ObjectCodec.TYPE_REF, refId);
+        return new Link(refId);
       }
 
-      // For mutable objects, check if we're in a cycle
-      if (visited.has(obj)) {
-        // We're in a cycle, create a reference
-        if (!this._encodeMemo.has(obj)) {
-          // Assign an ID for this object
-          const refId = `obj_${this._encodeCounter}`;
-          this._encodeCounter += 1;
-          this._encodeMemo.set(obj, refId);
+      // For mutable objects that need IDs, assign them
+      if (this._needsId.has(obj)) {
+        if (visited.has(obj)) {
+          // We're in a cycle, create a direct reference
+          if (!this._encodeMemo.has(obj)) {
+            // Assign an ID for this object
+            const refId = `obj_${this._encodeCounter}`;
+            this._encodeCounter += 1;
+            this._encodeMemo.set(obj, refId);
+          }
+          const refId = this._encodeMemo.get(obj);
+          return new Link(refId);
         }
-        const refId = this._encodeMemo.get(obj);
-        return this._makeLink(ObjectCodec.TYPE_REF, refId);
+
+        // Add to visited set
+        visited = new Set([...visited, obj]);
+
+        // Assign an ID to this object
+        const refId = `obj_${this._encodeCounter}`;
+        this._encodeCounter += 1;
+        this._encodeMemo.set(obj, refId);
       }
-
-      // Add to visited set
-      visited = new Set([...visited, obj]);
-
-      // Assign an ID to this object
-      const refId = `obj_${this._encodeCounter}`;
-      this._encodeCounter += 1;
-      this._encodeMemo.set(obj, refId);
     }
 
     // Encode based on type
@@ -148,21 +209,25 @@ export class ObjectCodec {
     }
 
     if (Array.isArray(obj)) {
-      const refId = this._encodeMemo.get(obj);
-      // Encode as: (array ref_id item0 item1 item2 ...)
-      const parts = [new Link(ObjectCodec.TYPE_ARRAY), new Link(refId)];
+      const parts = [];
       for (const item of obj) {
         // Encode each item
         const itemLink = this._encodeValue(item, visited);
         parts.push(itemLink);
       }
-      return new Link(undefined, parts);
+      // If this array has an ID, use self-reference format: (obj_id: array item1 item2 ...)
+      if (this._encodeMemo.has(obj)) {
+        const refId = this._encodeMemo.get(obj);
+        // Return the inline definition with self-reference ID
+        return new Link(refId, [new Link(ObjectCodec.TYPE_ARRAY), ...parts]);
+      } else {
+        // Wrap in a type marker for arrays without IDs: (array item1 item2 ...)
+        return new Link(undefined, [new Link(ObjectCodec.TYPE_ARRAY), ...parts]);
+      }
     }
 
     if (typeof obj === 'object') {
-      const refId = this._encodeMemo.get(obj);
-      // Encode as: (object ref_id (key0 value0) (key1 value1) ...)
-      const parts = [new Link(ObjectCodec.TYPE_OBJECT), new Link(refId)];
+      const parts = [];
       for (const [key, value] of Object.entries(obj)) {
         // Encode key and value
         const keyLink = this._encodeValue(key, visited);
@@ -171,7 +236,15 @@ export class ObjectCodec {
         const pair = new Link(undefined, [keyLink, valueLink]);
         parts.push(pair);
       }
-      return new Link(undefined, parts);
+      // If this object has an ID, use self-reference format: (obj_id: object (key val) ...)
+      if (this._encodeMemo.has(obj)) {
+        const refId = this._encodeMemo.get(obj);
+        // Return the inline definition with self-reference ID
+        return new Link(refId, [new Link(ObjectCodec.TYPE_OBJECT), ...parts]);
+      } else {
+        // Wrap in a type marker for objects without IDs: (object (key val) ...)
+        return new Link(undefined, [new Link(ObjectCodec.TYPE_OBJECT), ...parts]);
+      }
     }
 
     throw new TypeError(`Unsupported type: ${typeof obj}`);
@@ -183,12 +256,46 @@ export class ObjectCodec {
    * @returns {*} Decoded JavaScript value
    */
   _decodeLink(link) {
+    // Check if this is a direct reference to a previously decoded object
+    // Direct references have an id but no values, or the id refers to an existing object
+    if (link.id && this._decodeMemo.has(link.id)) {
+      return this._decodeMemo.get(link.id);
+    }
+
     if (!link.values || link.values.length === 0) {
-      // Empty link - this might be a simple id
+      // Empty link - this might be a simple id, reference, or empty collection
       if (link.id) {
+        // If it's in memo, return the cached object
+        if (this._decodeMemo.has(link.id)) {
+          return this._decodeMemo.get(link.id);
+        }
+
+        // If it starts with obj_, check if we have a forward reference in _allLinks
+        if (link.id.startsWith('obj_') && this._allLinks.length > 0) {
+          // Look for this ID in the remaining links
+          for (const otherLink of this._allLinks) {
+            if (otherLink.id === link.id) {
+              // Found it! Decode it now
+              return this._decodeLink(otherLink);
+            }
+          }
+
+          // Not found in links - create empty array as fallback
+          const result = [];
+          this._decodeMemo.set(link.id, result);
+          return result;
+        }
+
+        // Otherwise it's just a string ID
         return link.id;
       }
       return null;
+    }
+
+    // Check if this link has a self-reference ID (format: obj_0: type ...)
+    let selfRefId = null;
+    if (link.id && link.id.startsWith('obj_')) {
+      selfRefId = link.id;
     }
 
     // Get the type marker from the first value
@@ -264,74 +371,67 @@ export class ObjectCodec {
       return '';
     }
 
-    if (typeMarker === ObjectCodec.TYPE_REF) {
-      // This is a reference to a previously decoded object
-      if (link.values.length > 1) {
-        const refValue = link.values[1];
-        if (refValue && refValue.id) {
-          const refId = refValue.id;
-          if (this._decodeMemo.has(refId)) {
-            return this._decodeMemo.get(refId);
-          }
+    if (typeMarker === ObjectCodec.TYPE_ARRAY) {
+      // New format with self-reference: (obj_0: array item1 item2 ...)
+      // Old format (for backward compatibility): (array obj_id item1 item2 ...)
+      let startIdx = 1;
+      let arrayId = selfRefId;  // Use self-reference ID from link.id if present
+
+      // Check for old format with obj_id as second element
+      if (!arrayId && link.values.length > 1) {
+        const second = link.values[1];
+        if (second && second.id && second.id.startsWith('obj_')) {
+          arrayId = second.id;
+          startIdx = 2;
         }
       }
-      throw new Error('Unknown reference in link');
-    }
 
-    if (typeMarker === ObjectCodec.TYPE_ARRAY) {
-      if (link.values.length < 2) {
-        return [];
+      const resultArray = [];
+      if (arrayId) {
+        this._decodeMemo.set(arrayId, resultArray);
       }
 
-      const refValue = link.values[1];
-      const refId = refValue && refValue.id ? refValue.id : null;
-
-      // Create the array object first (to handle circular references)
-      const result = [];
-      if (refId) {
-        this._decodeMemo.set(refId, result);
-      }
-
-      // Decode items
-      for (let i = 2; i < link.values.length; i++) {
+      for (let i = startIdx; i < link.values.length; i++) {
         const itemLink = link.values[i];
         const decodedItem = this._decodeLink(itemLink);
-        result.push(decodedItem);
+        resultArray.push(decodedItem);
       }
-
-      return result;
+      return resultArray;
     }
 
     if (typeMarker === ObjectCodec.TYPE_OBJECT) {
-      if (link.values.length < 2) {
-        return {};
+      // New format with self-reference: (obj_0: object (key val) ...)
+      // Old format (for backward compatibility): (object obj_id (key val) ...)
+      let startIdx = 1;
+      let objectId = selfRefId;  // Use self-reference ID from link.id if present
+
+      // Check for old format with obj_id as second element
+      if (!objectId && link.values.length > 1) {
+        const second = link.values[1];
+        if (second && second.id && second.id.startsWith('obj_')) {
+          objectId = second.id;
+          startIdx = 2;
+        }
       }
 
-      const refValue = link.values[1];
-      const refId = refValue && refValue.id ? refValue.id : null;
-
-      // Create the object first (to handle circular references)
-      const result = {};
-      if (refId) {
-        this._decodeMemo.set(refId, result);
+      const resultObject = {};
+      if (objectId) {
+        this._decodeMemo.set(objectId, resultObject);
       }
 
-      // Decode key-value pairs
-      for (let i = 2; i < link.values.length; i++) {
+      for (let i = startIdx; i < link.values.length; i++) {
         const pairLink = link.values[i];
-        if (pairLink && pairLink.values && pairLink.values.length >= 2) {
-          // This should be a link with 2 values: key and value
+        if (pairLink.values && pairLink.values.length >= 2) {
           const keyLink = pairLink.values[0];
           const valueLink = pairLink.values[1];
 
           const decodedKey = this._decodeLink(keyLink);
           const decodedValue = this._decodeLink(valueLink);
 
-          result[decodedKey] = decodedValue;
+          resultObject[decodedKey] = decodedValue;
         }
       }
-
-      return result;
+      return resultObject;
     }
 
     // Unknown type marker
