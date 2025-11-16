@@ -1,0 +1,13 @@
+LICENSE
+README.md
+pyproject.toml
+src/link_notation_objects_codec/__init__.py
+src/link_notation_objects_codec/codec.py
+src/link_notation_objects_codec.egg-info/PKG-INFO
+src/link_notation_objects_codec.egg-info/SOURCES.txt
+src/link_notation_objects_codec.egg-info/dependency_links.txt
+src/link_notation_objects_codec.egg-info/requires.txt
+src/link_notation_objects_codec.egg-info/top_level.txt
+tests/test_basic_types.py
+tests/test_circular_references.py
+tests/test_collections.py
