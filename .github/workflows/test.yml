@@ -1,8 +1,6 @@
 name: Tests
 
 on:
-  push:
-    branches: [ main, issue-* ]
   pull_request:
     branches: [ main ]
 
@@ -11,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ['3.12']
+        python-version: ['3.13']
 
     steps:
     - uses: actions/checkout@v4

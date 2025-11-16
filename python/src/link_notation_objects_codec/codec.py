@@ -27,8 +27,6 @@ class ObjectCodec:
         self._encode_counter: int = 0
         # For tracking which objects need IDs (referenced multiple times or circularly)
         self._needs_id: Set[int] = set()
-        # For tracking objects that need separate top-level definitions
-        self._pending_definitions: Dict[int, Any] = {}
         # For tracking references during decoding
         self._decode_memo: Dict[str, Any] = {}
         # For storing all links during multi-link decoding
@@ -93,50 +91,6 @@ class ObjectCodec:
                 self._find_objects_needing_ids(key, seen, new_path)
                 self._find_objects_needing_ids(value, seen, new_path)
 
-    def _mark_containers_with_id_children(self, obj: Any, visited: Set[int]) -> bool:
-        """
-        Second pass: mark containers that contain objects with IDs as also needing IDs.
-        This avoids parser bugs with formats like (list (obj_0: ...) ...).
-
-        Args:
-            obj: The object to analyze
-            visited: Set of object IDs already visited
-
-        Returns:
-            True if this object or any of its children needs an ID
-        """
-        if not isinstance(obj, (list, dict)):
-            return False
-
-        obj_id = id(obj)
-
-        # Avoid infinite recursion
-        if obj_id in visited:
-            return obj_id in self._needs_id
-
-        visited.add(obj_id)
-
-        # Check if this object already needs an ID
-        has_id_child = obj_id in self._needs_id
-
-        # Check children
-        if isinstance(obj, list):
-            for item in obj:
-                if self._mark_containers_with_id_children(item, visited):
-                    has_id_child = True
-        elif isinstance(obj, dict):
-            for key, value in obj.items():
-                if self._mark_containers_with_id_children(key, visited):
-                    has_id_child = True
-                if self._mark_containers_with_id_children(value, visited):
-                    has_id_child = True
-
-        # If any child needs an ID, this container also needs an ID
-        if has_id_child:
-            self._needs_id.add(obj_id)
-
-        return has_id_child
-
     def encode(self, obj: Any) -> str:
         """
         Encode a Python object to Links Notation format.
@@ -151,35 +105,15 @@ class ObjectCodec:
         self._encode_memo = {}
         self._encode_counter = 0
         self._needs_id = set()
-        self._pending_definitions = {}
 
         # First pass: identify which objects need IDs (referenced multiple times or circularly)
         self._find_objects_needing_ids(obj)
 
-        # Encode - this will populate _pending_definitions for nested objects
+        # Encode the object
         link = self._encode_value(obj, depth=0)
 
-        # If there are pending definitions, we need to output multiple links
-        if self._pending_definitions:
-            # Start with the main link
-            links = [link]
-
-            # Add all pending definitions in order
-            # Save current pending dict and clear it to avoid re-adding during encoding
-            pending_copy = dict(self._pending_definitions)
-            self._pending_definitions = {}
-
-            for obj_id, (ref_id, obj_to_encode) in pending_copy.items():
-                # Encode this pending object at top level (depth=0)
-                # Pass a fresh visited set to ensure it encodes fully
-                obj_link = self._encode_value(obj_to_encode, visited=set(), depth=0)
-                links.append(obj_link)
-
-            # Format all links separated by newlines (parser requires newlines for multiple links)
-            return '\n'.join(l.format() for l in links)
-        else:
-            # Single link output
-            return link.format()
+        # Return formatted link
+        return link.format()
 
     def decode(self, notation: str) -> Any:
         """
@@ -257,12 +191,6 @@ class ObjectCodec:
 
             if obj_id in visited:
                 # We're in a cycle, create a direct reference
-                return Link(link_id=ref_id)
-
-            # If we're nested (depth > 0), add to pending definitions and return reference
-            if depth > 0 and obj_id not in self._pending_definitions:
-                self._pending_definitions[obj_id] = (ref_id, obj)
-                # Return just a reference, not the full definition
                 return Link(link_id=ref_id)
 
             # Add to visited set

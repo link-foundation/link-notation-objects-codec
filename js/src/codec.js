@@ -74,54 +74,6 @@ export class ObjectCodec {
   }
 
   /**
-   * Second pass: mark containers that contain objects with IDs as also needing IDs.
-   * This avoids parser bugs with formats like (array (obj_0: ...) ...).
-   * @param {*} obj - The object to analyze
-   * @param {Set} visited - Set of objects already visited
-   * @returns {boolean} True if this object or any of its children needs an ID
-   */
-  _markContainersWithIdChildren(obj, visited) {
-    if (obj === null || typeof obj !== 'object') {
-      return false;
-    }
-
-    // Avoid infinite recursion
-    if (visited.has(obj)) {
-      return this._needsId.has(obj);
-    }
-
-    visited.add(obj);
-
-    // Check if this object already needs an ID
-    let hasIdChild = this._needsId.has(obj);
-
-    // Check children
-    if (Array.isArray(obj)) {
-      for (const item of obj) {
-        if (this._markContainersWithIdChildren(item, visited)) {
-          hasIdChild = true;
-        }
-      }
-    } else if (typeof obj === 'object') {
-      for (const [key, value] of Object.entries(obj)) {
-        if (this._markContainersWithIdChildren(key, visited)) {
-          hasIdChild = true;
-        }
-        if (this._markContainersWithIdChildren(value, visited)) {
-          hasIdChild = true;
-        }
-      }
-    }
-
-    // If any child needs an ID, this container also needs an ID
-    if (hasIdChild) {
-      this._needsId.add(obj);
-    }
-
-    return hasIdChild;
-  }
-
-  /**
    * Encode a JavaScript object to Links Notation format.
    * @param {*} obj - The JavaScript object to encode
    * @returns {string} String representation in Links Notation format
@@ -135,13 +87,10 @@ export class ObjectCodec {
     // First pass: identify which objects need IDs (referenced multiple times or circularly)
     this._findObjectsNeedingIds(obj);
 
-    // Second pass: mark containers that contain objects with IDs as also needing IDs
-    // This avoids parser bugs with formats like (array (obj_0: ...) ...)
-    this._markContainersWithIdChildren(obj, new Set());
-
-    // Encode
+    // Encode the object
     const link = this._encodeValue(obj);
-    // Use link.format() directly instead of wrapping
+
+    // Return formatted link
     return link.format();
   }
 
