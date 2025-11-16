@@ -1,7 +1,6 @@
 """Tests for encoding/decoding collection types (lists and dicts)."""
 
-import pytest
-from link_notation_objects_codec import encode, decode
+from link_notation_objects_codec import decode, encode
 
 
 class TestLists:

@@ -3,7 +3,8 @@
 import base64
 import math
 from typing import Any, Dict, List, Optional, Set
-from links_notation import Parser, Link, format_links
+
+from links_notation import Link, Parser, format_links
 
 
 class ObjectCodec:
@@ -253,7 +254,7 @@ class ObjectCodec:
                     ref_id = ref_value.id
                     if ref_id in self._decode_memo:
                         return self._decode_memo[ref_id]
-            raise ValueError(f"Unknown reference in link")
+            raise ValueError("Unknown reference in link")
 
         elif type_marker == self.TYPE_LIST:
             if len(link.values) < 2:

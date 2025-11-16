@@ -1,7 +1,8 @@
 """Tests for encoding/decoding basic Python types."""
 
 import pytest
-from link_notation_objects_codec import encode, decode
+
+from link_notation_objects_codec import decode, encode
 
 
 class TestNoneType:

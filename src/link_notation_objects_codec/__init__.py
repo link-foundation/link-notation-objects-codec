@@ -5,7 +5,7 @@ This library provides serialization and deserialization of Python objects to/fro
 Links Notation format, with support for circular references and complex object graphs.
 """
 
-from .codec import ObjectCodec, encode, decode
+from .codec import ObjectCodec, decode, encode
 
 __version__ = "0.1.0"
 __all__ = ["ObjectCodec", "encode", "decode"]
