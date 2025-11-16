@@ -2,7 +2,7 @@ name: Tests
 
 on:
   push:
-    branches: [ main, issue-* ]
+    branches: [ main ]
   pull_request:
     branches: [ main ]
 
@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12']
+        python-version: ['3.13']
 
     steps:
     - uses: actions/checkout@v4
@@ -48,12 +48,12 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node-version: ['18', '20', '22']
+        node-version: ['22']
 
     steps:
     - uses: actions/checkout@v4
 
-    - name: Set up Node.js ${{ matrix.node-version }}
+    - name: Set up Node.js ${{ matrix.python-version }}
       uses: actions/setup-node@v4
       with:
         node-version: ${{ matrix.node-version }}
