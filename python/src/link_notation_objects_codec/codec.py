@@ -255,10 +255,11 @@ class ObjectCodec:
                 # Encode each item
                 item_link = self._encode_value(item, visited)
                 parts.append(item_link)
-            # If this list has an ID, use self-reference format: (obj_id: list item1 item2 ...)
+            # If this list has an ID, use format: (list obj_id item1 item2 ...)
+            # This avoids parser bugs with the `: ` syntax
             if obj_id in self._encode_memo:
                 ref_id = self._encode_memo[obj_id]
-                return Link(link_id=ref_id, values=[Link(link_id=self.TYPE_LIST)] + parts)
+                return Link(values=[Link(link_id=self.TYPE_LIST), Link(link_id=ref_id)] + parts)
             else:
                 # Wrap in a type marker for lists without IDs: (list item1 item2 ...)
                 return Link(values=[Link(link_id=self.TYPE_LIST)] + parts)
@@ -272,10 +273,11 @@ class ObjectCodec:
                 # Create a pair link
                 pair = Link(values=[key_link, value_link])
                 parts.append(pair)
-            # If this dict has an ID, use self-reference format: (obj_id: dict (key val) ...)
+            # If this dict has an ID, use format: (dict obj_id (key val) ...)
+            # This avoids parser bugs with the `: ` syntax
             if obj_id in self._encode_memo:
                 ref_id = self._encode_memo[obj_id]
-                return Link(link_id=ref_id, values=[Link(link_id=self.TYPE_DICT)] + parts)
+                return Link(values=[Link(link_id=self.TYPE_DICT), Link(link_id=ref_id)] + parts)
             else:
                 # Wrap in a type marker for dicts without IDs: (dict (key val) ...)
                 return Link(values=[Link(link_id=self.TYPE_DICT)] + parts)
@@ -315,57 +317,6 @@ class ObjectCodec:
                 # Otherwise it's just a string ID
                 return link.id
             return None
-
-        # Check if this link represents a collection with self-reference ID
-        # New format: (obj_0: dict (key val) ...) or (obj_0: list item ...)
-        if link.id and link.id.startswith('obj_'):
-            # This is a collection with a self-reference ID
-            # The first value should be the type marker (dict or list)
-            if not link.values or not hasattr(link.values[0], 'id'):
-                # No type marker found, return empty collection
-                result_list: List[Any] = []
-                self._decode_memo[link.id] = result_list
-                return result_list
-
-            type_marker = link.values[0].id
-            content_start_idx = 1
-
-            if type_marker == self.TYPE_DICT:
-                # Decode as dict: (obj_0: dict (key val) ...)
-                result_dict: Dict[Any, Any] = {}
-                self._decode_memo[link.id] = result_dict
-
-                for pair_link in link.values[content_start_idx:]:
-                    if hasattr(pair_link, 'values') and len(pair_link.values) >= 2:
-                        key_link = pair_link.values[0]
-                        value_link = pair_link.values[1]
-
-                        decoded_key = self._decode_link(key_link)
-                        decoded_value = self._decode_link(value_link)
-
-                        result_dict[decoded_key] = decoded_value
-
-                return result_dict
-            elif type_marker == self.TYPE_LIST:
-                # Decode as list: (obj_0: list item ...)
-                result_list = []
-                self._decode_memo[link.id] = result_list
-
-                for item_link in link.values[content_start_idx:]:
-                    decoded_item = self._decode_link(item_link)
-                    result_list.append(decoded_item)
-
-                return result_list
-            else:
-                # Unknown type marker, treat as list
-                result_list = []
-                self._decode_memo[link.id] = result_list
-
-                for item_link in link.values:
-                    decoded_item = self._decode_link(item_link)
-                    result_list.append(decoded_item)
-
-                return result_list
 
         # Get the type marker from the first value
         first_value = link.values[0]

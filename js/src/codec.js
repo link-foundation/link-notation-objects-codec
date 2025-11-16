@@ -257,10 +257,11 @@ export class ObjectCodec {
         const itemLink = this._encodeValue(item, visited);
         parts.push(itemLink);
       }
-      // If this array has an ID, use self-reference format: (obj_id: array item1 item2 ...)
+      // If this array has an ID, use format: (array obj_id item1 item2 ...)
+      // This avoids parser bugs with the `: ` syntax
       if (this._encodeMemo.has(obj)) {
         const refId = this._encodeMemo.get(obj);
-        return new Link(refId, [new Link(ObjectCodec.TYPE_ARRAY), ...parts]);
+        return new Link(undefined, [new Link(ObjectCodec.TYPE_ARRAY), new Link(refId), ...parts]);
       } else {
         // Wrap in a type marker for arrays without IDs: (array item1 item2 ...)
         return new Link(undefined, [new Link(ObjectCodec.TYPE_ARRAY), ...parts]);
@@ -277,10 +278,11 @@ export class ObjectCodec {
         const pair = new Link(undefined, [keyLink, valueLink]);
         parts.push(pair);
       }
-      // If this object has an ID, use self-reference format: (obj_id: object (key val) ...)
+      // If this object has an ID, use format: (object obj_id (key val) ...)
+      // This avoids parser bugs with the `: ` syntax
       if (this._encodeMemo.has(obj)) {
         const refId = this._encodeMemo.get(obj);
-        return new Link(refId, [new Link(ObjectCodec.TYPE_OBJECT), ...parts]);
+        return new Link(undefined, [new Link(ObjectCodec.TYPE_OBJECT), new Link(refId), ...parts]);
       } else {
         // Wrap in a type marker for objects without IDs: (object (key val) ...)
         return new Link(undefined, [new Link(ObjectCodec.TYPE_OBJECT), ...parts]);
@@ -322,64 +324,6 @@ export class ObjectCodec {
         return link.id;
       }
       return null;
-    }
-
-    // Check if this link represents a collection with self-reference ID
-    // New format: (obj_0: object (key val) ...) or (obj_0: array item ...)
-    if (link.id && link.id.startsWith('obj_')) {
-      // This is a collection with a self-reference ID
-      // The first value should be the type marker (object or array)
-      if (!link.values || link.values.length === 0 || !link.values[0].id) {
-        // No type marker found, return empty array
-        const resultArray = [];
-        this._decodeMemo.set(link.id, resultArray);
-        return resultArray;
-      }
-
-      const typeMarker = link.values[0].id;
-      const contentStartIdx = 1;
-
-      if (typeMarker === ObjectCodec.TYPE_OBJECT) {
-        // Decode as object: (obj_0: object (key val) ...)
-        const resultObject = {};
-        this._decodeMemo.set(link.id, resultObject);
-
-        for (const pairLink of link.values.slice(contentStartIdx)) {
-          if (pairLink.values && pairLink.values.length >= 2) {
-            const keyLink = pairLink.values[0];
-            const valueLink = pairLink.values[1];
-
-            const decodedKey = this._decodeLink(keyLink);
-            const decodedValue = this._decodeLink(valueLink);
-
-            resultObject[decodedKey] = decodedValue;
-          }
-        }
-
-        return resultObject;
-      } else if (typeMarker === ObjectCodec.TYPE_ARRAY) {
-        // Decode as array: (obj_0: array item ...)
-        const resultArray = [];
-        this._decodeMemo.set(link.id, resultArray);
-
-        for (const itemLink of link.values.slice(contentStartIdx)) {
-          const decodedItem = this._decodeLink(itemLink);
-          resultArray.push(decodedItem);
-        }
-
-        return resultArray;
-      } else {
-        // Unknown type marker, treat as array
-        const resultArray = [];
-        this._decodeMemo.set(link.id, resultArray);
-
-        for (const itemLink of link.values) {
-          const decodedItem = this._decodeLink(itemLink);
-          resultArray.push(decodedItem);
-        }
-
-        return resultArray;
-      }
     }
 
     // Get the type marker from the first value
