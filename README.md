@@ -144,13 +144,13 @@ The library uses the [links-notation](https://github.com/link-foundation/links-n
 
 - Basic types are encoded with type markers: `(int 42)`, `(str "hello")`, `(bool True)`
 - Strings are base64-encoded to handle special characters and newlines
-- Collections include object IDs for reference tracking: `(list obj_0 item1 item2 ...)`
-- Circular references use special `ref` links: `(ref obj_0)`
+- Collections use built-in links notation self-references: `(obj_0: item1 item2 ...)`
+- Circular references use direct object ID references: `obj_0`
 
 This approach allows for:
 - Universal representation of object graphs
 - Preservation of object identity
-- Natural handling of circular references
+- Natural handling of circular references using built-in links notation syntax
 - Cross-language compatibility
 
 ## Development
