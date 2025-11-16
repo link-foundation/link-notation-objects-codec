@@ -78,6 +78,50 @@ class ObjectCodec:
                 self._find_objects_needing_ids(key, seen)
                 self._find_objects_needing_ids(value, seen)
 
+    def _mark_containers_with_id_children(self, obj: Any, visited: Set[int]) -> bool:
+        """
+        Second pass: mark containers that contain objects with IDs as also needing IDs.
+        This avoids parser bugs with formats like (list (obj_0: ...) ...).
+
+        Args:
+            obj: The object to analyze
+            visited: Set of object IDs already visited
+
+        Returns:
+            True if this object or any of its children needs an ID
+        """
+        if not isinstance(obj, (list, dict)):
+            return False
+
+        obj_id = id(obj)
+
+        # Avoid infinite recursion
+        if obj_id in visited:
+            return obj_id in self._needs_id
+
+        visited.add(obj_id)
+
+        # Check if this object already needs an ID
+        has_id_child = obj_id in self._needs_id
+
+        # Check children
+        if isinstance(obj, list):
+            for item in obj:
+                if self._mark_containers_with_id_children(item, visited):
+                    has_id_child = True
+        elif isinstance(obj, dict):
+            for key, value in obj.items():
+                if self._mark_containers_with_id_children(key, visited):
+                    has_id_child = True
+                if self._mark_containers_with_id_children(value, visited):
+                    has_id_child = True
+
+        # If any child needs an ID, this container also needs an ID
+        if has_id_child:
+            self._needs_id.add(obj_id)
+
+        return has_id_child
+
     def encode(self, obj: Any) -> str:
         """
         Encode a Python object to Links Notation format.
@@ -93,9 +137,12 @@ class ObjectCodec:
         self._encode_counter = 0
         self._needs_id = set()
 
-        # We need to assign IDs to ALL mutable objects to avoid parser issues
-        # with nested structures like (list (obj_0: ...) obj_0)
-        # So we skip the first pass and just assign IDs to everything
+        # First pass: identify which objects need IDs (referenced multiple times or circularly)
+        self._find_objects_needing_ids(obj)
+
+        # Second pass: mark containers that contain objects with IDs as also needing IDs
+        # This avoids parser bugs with formats like (list (obj_0: ...) ...)
+        self._mark_containers_with_id_children(obj, set())
 
         # Encode
         link = self._encode_value(obj)
@@ -154,8 +201,8 @@ class ObjectCodec:
             ref_id = self._encode_memo[obj_id]
             return Link(link_id=ref_id)
 
-        # For mutable objects, assign IDs to all of them
-        if isinstance(obj, (list, dict)):
+        # For mutable objects that need IDs, assign them
+        if isinstance(obj, (list, dict)) and obj_id in self._needs_id:
             if obj_id in visited:
                 # We're in a cycle, create a direct reference
                 if obj_id not in self._encode_memo:
@@ -203,18 +250,21 @@ class ObjectCodec:
             return self._make_link(self.TYPE_STR, b64_encoded)
 
         elif isinstance(obj, list):
-            # All lists get IDs now, so we always use link_id
-            ref_id = self._encode_memo[obj_id]
             parts = []
             for item in obj:
                 # Encode each item
                 item_link = self._encode_value(item, visited)
                 parts.append(item_link)
-            return Link(link_id=ref_id, values=parts)
+            # If this list has an ID, use format: (list obj_id item1 item2 ...)
+            # This avoids parser bugs with the `: ` syntax
+            if obj_id in self._encode_memo:
+                ref_id = self._encode_memo[obj_id]
+                return Link(values=[Link(link_id=self.TYPE_LIST), Link(link_id=ref_id)] + parts)
+            else:
+                # Wrap in a type marker for lists without IDs: (list item1 item2 ...)
+                return Link(values=[Link(link_id=self.TYPE_LIST)] + parts)
 
         elif isinstance(obj, dict):
-            # All dicts get IDs now, so we always use link_id
-            ref_id = self._encode_memo[obj_id]
             parts = []
             for key, value in obj.items():
                 # Encode key and value
@@ -223,7 +273,14 @@ class ObjectCodec:
                 # Create a pair link
                 pair = Link(values=[key_link, value_link])
                 parts.append(pair)
-            return Link(link_id=ref_id, values=parts)
+            # If this dict has an ID, use format: (dict obj_id (key val) ...)
+            # This avoids parser bugs with the `: ` syntax
+            if obj_id in self._encode_memo:
+                ref_id = self._encode_memo[obj_id]
+                return Link(values=[Link(link_id=self.TYPE_DICT), Link(link_id=ref_id)] + parts)
+            else:
+                # Wrap in a type marker for dicts without IDs: (dict (key val) ...)
+                return Link(values=[Link(link_id=self.TYPE_DICT)] + parts)
 
         else:
             raise TypeError(f"Unsupported type: {type(obj)}")
@@ -374,6 +431,50 @@ class ObjectCodec:
                         # If decode fails, return the raw value
                         return b64_str
             return ""
+
+        elif type_marker == self.TYPE_LIST:
+            # Check if second element is an obj_id: (list obj_id item1 item2 ...)
+            start_idx = 1
+            list_id = None
+            if len(link.values) > 1:
+                second = link.values[1]
+                if hasattr(second, 'id') and second.id and second.id.startswith('obj_'):
+                    list_id = second.id
+                    start_idx = 2
+
+            result_list: List[Any] = []
+            if list_id:
+                self._decode_memo[list_id] = result_list
+
+            for item_link in link.values[start_idx:]:
+                decoded_item = self._decode_link(item_link)
+                result_list.append(decoded_item)
+            return result_list
+
+        elif type_marker == self.TYPE_DICT:
+            # Check if second element is an obj_id: (dict obj_id (key val) ...)
+            start_idx = 1
+            dict_id = None
+            if len(link.values) > 1:
+                second = link.values[1]
+                if hasattr(second, 'id') and second.id and second.id.startswith('obj_'):
+                    dict_id = second.id
+                    start_idx = 2
+
+            result_dict: Dict[Any, Any] = {}
+            if dict_id:
+                self._decode_memo[dict_id] = result_dict
+
+            for pair_link in link.values[start_idx:]:
+                if hasattr(pair_link, 'values') and len(pair_link.values) >= 2:
+                    key_link = pair_link.values[0]
+                    value_link = pair_link.values[1]
+
+                    decoded_key = self._decode_link(key_link)
+                    decoded_value = self._decode_link(value_link)
+
+                    result_dict[decoded_key] = decoded_value
+            return result_dict
 
         else:
             # Unknown type marker

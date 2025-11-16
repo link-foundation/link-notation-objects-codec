@@ -23,6 +23,8 @@ export class ObjectCodec {
     // For tracking object identity during encoding
     this._encodeMemo = new Map();
     this._encodeCounter = 0;
+    // For tracking which objects need IDs (referenced multiple times or circularly)
+    this._needsId = new Set();
     // For tracking references during decoding
     this._decodeMemo = new Map();
   }
@@ -39,14 +41,103 @@ export class ObjectCodec {
   }
 
   /**
+   * First pass: identify which objects need IDs (referenced multiple times or circularly).
+   * @param {*} obj - The object to analyze
+   * @param {Map} seen - Map tracking how many times we've seen each object
+   */
+  _findObjectsNeedingIds(obj, seen = new Map()) {
+    // Only track mutable objects (arrays and objects)
+    if (obj === null || typeof obj !== 'object') {
+      return;
+    }
+
+    // If we've seen this object before, it needs an ID
+    if (seen.has(obj)) {
+      this._needsId.add(obj);
+      return; // Don't recurse again
+    }
+
+    // Mark as seen
+    seen.set(obj, 1);
+
+    // Recurse into structure
+    if (Array.isArray(obj)) {
+      for (const item of obj) {
+        this._findObjectsNeedingIds(item, seen);
+      }
+    } else if (typeof obj === 'object') {
+      for (const [key, value] of Object.entries(obj)) {
+        this._findObjectsNeedingIds(key, seen);
+        this._findObjectsNeedingIds(value, seen);
+      }
+    }
+  }
+
+  /**
+   * Second pass: mark containers that contain objects with IDs as also needing IDs.
+   * This avoids parser bugs with formats like (array (obj_0: ...) ...).
+   * @param {*} obj - The object to analyze
+   * @param {Set} visited - Set of objects already visited
+   * @returns {boolean} True if this object or any of its children needs an ID
+   */
+  _markContainersWithIdChildren(obj, visited) {
+    if (obj === null || typeof obj !== 'object') {
+      return false;
+    }
+
+    // Avoid infinite recursion
+    if (visited.has(obj)) {
+      return this._needsId.has(obj);
+    }
+
+    visited.add(obj);
+
+    // Check if this object already needs an ID
+    let hasIdChild = this._needsId.has(obj);
+
+    // Check children
+    if (Array.isArray(obj)) {
+      for (const item of obj) {
+        if (this._markContainersWithIdChildren(item, visited)) {
+          hasIdChild = true;
+        }
+      }
+    } else if (typeof obj === 'object') {
+      for (const [key, value] of Object.entries(obj)) {
+        if (this._markContainersWithIdChildren(key, visited)) {
+          hasIdChild = true;
+        }
+        if (this._markContainersWithIdChildren(value, visited)) {
+          hasIdChild = true;
+        }
+      }
+    }
+
+    // If any child needs an ID, this container also needs an ID
+    if (hasIdChild) {
+      this._needsId.add(obj);
+    }
+
+    return hasIdChild;
+  }
+
+  /**
    * Encode a JavaScript object to Links Notation format.
    * @param {*} obj - The JavaScript object to encode
    * @returns {string} String representation in Links Notation format
    */
   encode(obj) {
-    // Reset memo for each encode operation
+    // Reset state for each encode operation
     this._encodeMemo = new Map();
     this._encodeCounter = 0;
+    this._needsId = new Set();
+
+    // First pass: identify which objects need IDs (referenced multiple times or circularly)
+    this._findObjectsNeedingIds(obj);
+
+    // Second pass: mark containers that contain objects with IDs as also needing IDs
+    // This avoids parser bugs with formats like (array (obj_0: ...) ...)
+    this._markContainersWithIdChildren(obj, new Set());
 
     // Encode
     const link = this._encodeValue(obj);
@@ -97,26 +188,28 @@ export class ObjectCodec {
         return new Link(refId);
       }
 
-      // For mutable objects, check if we're in a cycle
-      if (visited.has(obj)) {
-        // We're in a cycle, create a direct reference
-        if (!this._encodeMemo.has(obj)) {
-          // Assign an ID for this object
-          const refId = `obj_${this._encodeCounter}`;
-          this._encodeCounter += 1;
-          this._encodeMemo.set(obj, refId);
+      // For mutable objects that need IDs, assign them
+      if (this._needsId.has(obj)) {
+        if (visited.has(obj)) {
+          // We're in a cycle, create a direct reference
+          if (!this._encodeMemo.has(obj)) {
+            // Assign an ID for this object
+            const refId = `obj_${this._encodeCounter}`;
+            this._encodeCounter += 1;
+            this._encodeMemo.set(obj, refId);
+          }
+          const refId = this._encodeMemo.get(obj);
+          return new Link(refId);
         }
-        const refId = this._encodeMemo.get(obj);
-        return new Link(refId);
+
+        // Add to visited set
+        visited = new Set([...visited, obj]);
+
+        // Assign an ID to this object
+        const refId = `obj_${this._encodeCounter}`;
+        this._encodeCounter += 1;
+        this._encodeMemo.set(obj, refId);
       }
-
-      // Add to visited set
-      visited = new Set([...visited, obj]);
-
-      // Assign an ID to this object
-      const refId = `obj_${this._encodeCounter}`;
-      this._encodeCounter += 1;
-      this._encodeMemo.set(obj, refId);
     }
 
     // Encode based on type
@@ -158,20 +251,24 @@ export class ObjectCodec {
     }
 
     if (Array.isArray(obj)) {
-      // All arrays get IDs now, so we always use link_id
-      const refId = this._encodeMemo.get(obj);
       const parts = [];
       for (const item of obj) {
         // Encode each item
         const itemLink = this._encodeValue(item, visited);
         parts.push(itemLink);
       }
-      return new Link(refId, parts);
+      // If this array has an ID, use format: (array obj_id item1 item2 ...)
+      // This avoids parser bugs with the `: ` syntax
+      if (this._encodeMemo.has(obj)) {
+        const refId = this._encodeMemo.get(obj);
+        return new Link(undefined, [new Link(ObjectCodec.TYPE_ARRAY), new Link(refId), ...parts]);
+      } else {
+        // Wrap in a type marker for arrays without IDs: (array item1 item2 ...)
+        return new Link(undefined, [new Link(ObjectCodec.TYPE_ARRAY), ...parts]);
+      }
     }
 
     if (typeof obj === 'object') {
-      // All objects get IDs now, so we always use link_id
-      const refId = this._encodeMemo.get(obj);
       const parts = [];
       for (const [key, value] of Object.entries(obj)) {
         // Encode key and value
@@ -181,7 +278,15 @@ export class ObjectCodec {
         const pair = new Link(undefined, [keyLink, valueLink]);
         parts.push(pair);
       }
-      return new Link(refId, parts);
+      // If this object has an ID, use format: (object obj_id (key val) ...)
+      // This avoids parser bugs with the `: ` syntax
+      if (this._encodeMemo.has(obj)) {
+        const refId = this._encodeMemo.get(obj);
+        return new Link(undefined, [new Link(ObjectCodec.TYPE_OBJECT), new Link(refId), ...parts]);
+      } else {
+        // Wrap in a type marker for objects without IDs: (object (key val) ...)
+        return new Link(undefined, [new Link(ObjectCodec.TYPE_OBJECT), ...parts]);
+      }
     }
 
     throw new TypeError(`Unsupported type: ${typeof obj}`);
@@ -368,6 +473,63 @@ export class ObjectCodec {
         }
       }
       return '';
+    }
+
+    if (typeMarker === ObjectCodec.TYPE_ARRAY) {
+      // Check if second element is an obj_id: (array obj_id item1 item2 ...)
+      let startIdx = 1;
+      let arrayId = null;
+      if (link.values.length > 1) {
+        const second = link.values[1];
+        if (second && second.id && second.id.startsWith('obj_')) {
+          arrayId = second.id;
+          startIdx = 2;
+        }
+      }
+
+      const resultArray = [];
+      if (arrayId) {
+        this._decodeMemo.set(arrayId, resultArray);
+      }
+
+      for (let i = startIdx; i < link.values.length; i++) {
+        const itemLink = link.values[i];
+        const decodedItem = this._decodeLink(itemLink);
+        resultArray.push(decodedItem);
+      }
+      return resultArray;
+    }
+
+    if (typeMarker === ObjectCodec.TYPE_OBJECT) {
+      // Check if second element is an obj_id: (object obj_id (key val) ...)
+      let startIdx = 1;
+      let objectId = null;
+      if (link.values.length > 1) {
+        const second = link.values[1];
+        if (second && second.id && second.id.startsWith('obj_')) {
+          objectId = second.id;
+          startIdx = 2;
+        }
+      }
+
+      const resultObject = {};
+      if (objectId) {
+        this._decodeMemo.set(objectId, resultObject);
+      }
+
+      for (let i = startIdx; i < link.values.length; i++) {
+        const pairLink = link.values[i];
+        if (pairLink.values && pairLink.values.length >= 2) {
+          const keyLink = pairLink.values[0];
+          const valueLink = pairLink.values[1];
+
+          const decodedKey = this._decodeLink(keyLink);
+          const decodedValue = this._decodeLink(valueLink);
+
+          resultObject[decodedKey] = decodedValue;
+        }
+      }
+      return resultObject;
     }
 
     // Unknown type marker
