@@ -27,8 +27,12 @@ class ObjectCodec:
         self._encode_counter: int = 0
         # For tracking which objects need IDs (referenced multiple times or circularly)
         self._needs_id: Set[int] = set()
+        # For tracking objects that need separate top-level definitions
+        self._pending_definitions: Dict[int, Any] = {}
         # For tracking references during decoding
         self._decode_memo: Dict[str, Any] = {}
+        # For storing all links during multi-link decoding
+        self._all_links: List[Any] = []
 
     def _make_link(self, *parts: str) -> Link:
         """
@@ -44,16 +48,19 @@ class ObjectCodec:
         values = [Link(link_id=part) for part in parts]
         return Link(values=values)
 
-    def _find_objects_needing_ids(self, obj: Any, seen: Optional[Dict[int, int]] = None) -> None:
+    def _find_objects_needing_ids(self, obj: Any, seen: Optional[Dict[int, List[int]]] = None, path: Optional[List[int]] = None) -> None:
         """
         First pass: identify which objects need IDs (referenced multiple times or circularly).
 
         Args:
             obj: The object to analyze
-            seen: Dict mapping object ID to count of how many times we've seen it
+            seen: Dict mapping object ID to list of parent IDs in the path
+            path: Current path of object IDs from root
         """
         if seen is None:
             seen = {}
+        if path is None:
+            path = []
 
         # Only track mutable objects
         if not isinstance(obj, (list, dict)):
@@ -61,22 +68,30 @@ class ObjectCodec:
 
         obj_id = id(obj)
 
-        # If we've seen this object before, it needs an ID
+        # If we've seen this object before, it's referenced multiple times or circularly
         if obj_id in seen:
             self._needs_id.add(obj_id)
+            # Also mark all objects in the cycle as needing IDs
+            if obj_id in path:
+                # This is a circular reference - mark all objects in the cycle
+                cycle_start = path.index(obj_id)
+                for cycle_obj_id in path[cycle_start:]:
+                    self._needs_id.add(cycle_obj_id)
             return  # Don't recurse again
 
-        # Mark as seen
-        seen[obj_id] = 1
+        # Mark as seen with current path
+        seen[obj_id] = list(path)
+        # Add to current path
+        new_path = path + [obj_id]
 
         # Recurse into structure
         if isinstance(obj, list):
             for item in obj:
-                self._find_objects_needing_ids(item, seen)
+                self._find_objects_needing_ids(item, seen, new_path)
         elif isinstance(obj, dict):
             for key, value in obj.items():
-                self._find_objects_needing_ids(key, seen)
-                self._find_objects_needing_ids(value, seen)
+                self._find_objects_needing_ids(key, seen, new_path)
+                self._find_objects_needing_ids(value, seen, new_path)
 
     def _mark_containers_with_id_children(self, obj: Any, visited: Set[int]) -> bool:
         """
@@ -136,18 +151,35 @@ class ObjectCodec:
         self._encode_memo = {}
         self._encode_counter = 0
         self._needs_id = set()
+        self._pending_definitions = {}
 
         # First pass: identify which objects need IDs (referenced multiple times or circularly)
         self._find_objects_needing_ids(obj)
 
-        # Second pass: mark containers that contain objects with IDs as also needing IDs
-        # This avoids parser bugs with formats like (list (obj_0: ...) ...)
-        self._mark_containers_with_id_children(obj, set())
+        # Encode - this will populate _pending_definitions for nested objects
+        link = self._encode_value(obj, depth=0)
 
-        # Encode
-        link = self._encode_value(obj)
-        # Use link.format() directly instead of format_links to avoid extra wrapping
-        return link.format()
+        # If there are pending definitions, we need to output multiple links
+        if self._pending_definitions:
+            # Start with the main link
+            links = [link]
+
+            # Add all pending definitions in order
+            # Save current pending dict and clear it to avoid re-adding during encoding
+            pending_copy = dict(self._pending_definitions)
+            self._pending_definitions = {}
+
+            for obj_id, (ref_id, obj_to_encode) in pending_copy.items():
+                # Encode this pending object at top level (depth=0)
+                # Pass a fresh visited set to ensure it encodes fully
+                obj_link = self._encode_value(obj_to_encode, visited=set(), depth=0)
+                links.append(obj_link)
+
+            # Format all links separated by newlines (parser requires newlines for multiple links)
+            return '\n'.join(l.format() for l in links)
+        else:
+            # Single link output
+            return link.format()
 
     def decode(self, notation: str) -> Any:
         """
@@ -159,12 +191,21 @@ class ObjectCodec:
         Returns:
             Reconstructed Python object
         """
-        # Reset memo for each decode operation
+        # Reset state for each decode operation
         self._decode_memo = {}
+        self._all_links = []
 
         links = self.parser.parse(notation)
         if not links:
             return None
+
+        # If there are multiple links, store them all for forward reference resolution
+        if len(links) > 1:
+            self._all_links = links
+            # Decode the first link (this will be the main result)
+            # Forward references will be resolved automatically
+            result = self._decode_link(links[0])
+            return result
 
         link = links[0]
 
@@ -178,13 +219,14 @@ class ObjectCodec:
 
         return self._decode_link(link)
 
-    def _encode_value(self, obj: Any, visited: Optional[Set[int]] = None) -> Link:
+    def _encode_value(self, obj: Any, visited: Optional[Set[int]] = None, depth: int = 0) -> Link:
         """
         Encode a value into a Link.
 
         Args:
             obj: The value to encode
             visited: Set of object IDs currently being processed (for cycle detection)
+            depth: Current nesting depth (0 = top level)
 
         Returns:
             Link object
@@ -197,29 +239,34 @@ class ObjectCodec:
         # Check if we've seen this object before (for circular references and shared objects)
         # Only track mutable objects (lists, dicts)
         if isinstance(obj, (list, dict)) and obj_id in self._encode_memo:
-            # Return a direct reference using the object's ID
-            ref_id = self._encode_memo[obj_id]
-            return Link(link_id=ref_id)
+            # If depth > 0, return a reference
+            # If depth == 0, we're encoding this as a top-level definition, so continue
+            if depth > 0:
+                ref_id = self._encode_memo[obj_id]
+                return Link(link_id=ref_id)
 
         # For mutable objects that need IDs, assign them
         if isinstance(obj, (list, dict)) and obj_id in self._needs_id:
+            # Assign an ID if not already assigned
+            if obj_id not in self._encode_memo:
+                ref_id = f"obj_{self._encode_counter}"
+                self._encode_counter += 1
+                self._encode_memo[obj_id] = ref_id
+            else:
+                ref_id = self._encode_memo[obj_id]
+
             if obj_id in visited:
                 # We're in a cycle, create a direct reference
-                if obj_id not in self._encode_memo:
-                    # Assign an ID for this object
-                    ref_id = f"obj_{self._encode_counter}"
-                    self._encode_counter += 1
-                    self._encode_memo[obj_id] = ref_id
-                ref_id = self._encode_memo[obj_id]
+                return Link(link_id=ref_id)
+
+            # If we're nested (depth > 0), add to pending definitions and return reference
+            if depth > 0 and obj_id not in self._pending_definitions:
+                self._pending_definitions[obj_id] = (ref_id, obj)
+                # Return just a reference, not the full definition
                 return Link(link_id=ref_id)
 
             # Add to visited set
             visited = visited | {obj_id}
-
-            # Assign an ID to this object
-            ref_id = f"obj_{self._encode_counter}"
-            self._encode_counter += 1
-            self._encode_memo[obj_id] = ref_id
 
         # Encode based on type
         if obj is None:
@@ -252,8 +299,8 @@ class ObjectCodec:
         elif isinstance(obj, list):
             parts = []
             for item in obj:
-                # Encode each item
-                item_link = self._encode_value(item, visited)
+                # Encode each item with increased depth
+                item_link = self._encode_value(item, visited, depth + 1)
                 parts.append(item_link)
             # If this list has an ID, use self-reference format: (obj_id: list item1 item2 ...)
             if obj_id in self._encode_memo:
@@ -266,9 +313,9 @@ class ObjectCodec:
         elif isinstance(obj, dict):
             parts = []
             for key, value in obj.items():
-                # Encode key and value
-                key_link = self._encode_value(key, visited)
-                value_link = self._encode_value(value, visited)
+                # Encode key and value with increased depth
+                key_link = self._encode_value(key, visited, depth + 1)
+                value_link = self._encode_value(value, visited, depth + 1)
                 # Create a pair link
                 pair = Link(values=[key_link, value_link])
                 parts.append(pair)
@@ -305,9 +352,15 @@ class ObjectCodec:
                 if link.id in self._decode_memo:
                     return self._decode_memo[link.id]
 
-                # If it starts with obj_, it's an empty collection
-                if link.id.startswith('obj_'):
-                    # Create empty list (we'll assume list for now; dict would have pairs)
+                # If it starts with obj_, check if we have a forward reference in _all_links
+                if link.id.startswith('obj_') and self._all_links:
+                    # Look for this ID in the remaining links
+                    for other_link in self._all_links:
+                        if hasattr(other_link, 'id') and other_link.id == link.id:
+                            # Found it! Decode it now
+                            return self._decode_link(other_link)
+
+                    # Not found in links - create empty list as fallback
                     result = []
                     self._decode_memo[link.id] = result
                     return result

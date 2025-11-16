@@ -23,7 +23,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-    "links-notation>=0.9.0,<0.10.0",
+    "links-notation>=0.11.0,<0.12.0",
 ]
 
 [project.optional-dependencies]
