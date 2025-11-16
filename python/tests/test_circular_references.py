@@ -12,8 +12,8 @@ class TestCircularReferences:
         lst.append(lst)
 
         encoded = encode(lst)
-        # Verify correct Links Notation format with self-reference
-        assert encoded == "(list obj_0 obj_0)"
+        # Verify correct Links Notation format with built-in self-reference syntax
+        assert encoded == "(obj_0: list obj_0)"
 
         decoded = decode(encoded)
 
@@ -28,8 +28,8 @@ class TestCircularReferences:
         d["self"] = d
 
         encoded = encode(d)
-        # Verify correct Links Notation format with self-reference
-        assert encoded == "(dict obj_0 ((str c2VsZg==) obj_0))"
+        # Verify correct Links Notation format with built-in self-reference syntax
+        assert encoded == "(obj_0: dict ((str c2VsZg==) obj_0))"
 
         decoded = decode(encoded)
 
@@ -46,8 +46,8 @@ class TestCircularReferences:
         list2.append(list1)
 
         encoded = encode(list1)
-        # Verify correct Links Notation format with mutual references
-        assert encoded == "(list obj_0 (int 1) (int 2) (list obj_1 (int 3) (int 4) obj_0))"
+        # Verify correct Links Notation format with built-in self-reference syntax
+        assert encoded == "(obj_0: list (int 1) (int 2) (obj_1: list (int 3) (int 4) obj_0))"
 
         decoded = decode(encoded)
 

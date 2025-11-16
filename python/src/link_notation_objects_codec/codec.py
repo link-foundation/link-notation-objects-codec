@@ -255,11 +255,10 @@ class ObjectCodec:
                 # Encode each item
                 item_link = self._encode_value(item, visited)
                 parts.append(item_link)
-            # If this list has an ID, use format: (list obj_id item1 item2 ...)
-            # This avoids parser bugs with the `: ` syntax
+            # If this list has an ID, use self-reference format: (obj_id: list item1 item2 ...)
             if obj_id in self._encode_memo:
                 ref_id = self._encode_memo[obj_id]
-                return Link(values=[Link(link_id=self.TYPE_LIST), Link(link_id=ref_id)] + parts)
+                return Link(link_id=ref_id, values=[Link(link_id=self.TYPE_LIST)] + parts)
             else:
                 # Wrap in a type marker for lists without IDs: (list item1 item2 ...)
                 return Link(values=[Link(link_id=self.TYPE_LIST)] + parts)
@@ -273,11 +272,10 @@ class ObjectCodec:
                 # Create a pair link
                 pair = Link(values=[key_link, value_link])
                 parts.append(pair)
-            # If this dict has an ID, use format: (dict obj_id (key val) ...)
-            # This avoids parser bugs with the `: ` syntax
+            # If this dict has an ID, use self-reference format: (obj_id: dict (key val) ...)
             if obj_id in self._encode_memo:
                 ref_id = self._encode_memo[obj_id]
-                return Link(values=[Link(link_id=self.TYPE_DICT), Link(link_id=ref_id)] + parts)
+                return Link(link_id=ref_id, values=[Link(link_id=self.TYPE_DICT)] + parts)
             else:
                 # Wrap in a type marker for dicts without IDs: (dict (key val) ...)
                 return Link(values=[Link(link_id=self.TYPE_DICT)] + parts)
@@ -317,6 +315,11 @@ class ObjectCodec:
                 # Otherwise it's just a string ID
                 return link.id
             return None
+
+        # Check if this link has a self-reference ID (format: obj_0: type ...)
+        self_ref_id = None
+        if link.id and link.id.startswith('obj_'):
+            self_ref_id = link.id
 
         # Get the type marker from the first value
         first_value = link.values[0]
@@ -373,10 +376,13 @@ class ObjectCodec:
             return ""
 
         elif type_marker == self.TYPE_LIST:
-            # Check if second element is an obj_id: (list obj_id item1 item2 ...)
+            # New format with self-reference: (obj_0: list item1 item2 ...)
+            # Old format (for backward compatibility): (list obj_id item1 item2 ...)
             start_idx = 1
-            list_id = None
-            if len(link.values) > 1:
+            list_id = self_ref_id  # Use self-reference ID from link.id if present
+
+            # Check for old format with obj_id as second element
+            if not list_id and len(link.values) > 1:
                 second = link.values[1]
                 if hasattr(second, 'id') and second.id and second.id.startswith('obj_'):
                     list_id = second.id
@@ -392,10 +398,13 @@ class ObjectCodec:
             return result_list
 
         elif type_marker == self.TYPE_DICT:
-            # Check if second element is an obj_id: (dict obj_id (key val) ...)
+            # New format with self-reference: (obj_0: dict (key val) ...)
+            # Old format (for backward compatibility): (dict obj_id (key val) ...)
             start_idx = 1
-            dict_id = None
-            if len(link.values) > 1:
+            dict_id = self_ref_id  # Use self-reference ID from link.id if present
+
+            # Check for old format with obj_id as second element
+            if not dict_id and len(link.values) > 1:
                 second = link.values[1]
                 if hasattr(second, 'id') and second.id and second.id.startswith('obj_'):
                     dict_id = second.id

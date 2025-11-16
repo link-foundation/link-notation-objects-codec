@@ -257,11 +257,10 @@ export class ObjectCodec {
         const itemLink = this._encodeValue(item, visited);
         parts.push(itemLink);
       }
-      // If this array has an ID, use format: (array obj_id item1 item2 ...)
-      // This avoids parser bugs with the `: ` syntax
+      // If this array has an ID, use self-reference format: (obj_id: array item1 item2 ...)
       if (this._encodeMemo.has(obj)) {
         const refId = this._encodeMemo.get(obj);
-        return new Link(undefined, [new Link(ObjectCodec.TYPE_ARRAY), new Link(refId), ...parts]);
+        return new Link(refId, [new Link(ObjectCodec.TYPE_ARRAY), ...parts]);
       } else {
         // Wrap in a type marker for arrays without IDs: (array item1 item2 ...)
         return new Link(undefined, [new Link(ObjectCodec.TYPE_ARRAY), ...parts]);
@@ -278,11 +277,10 @@ export class ObjectCodec {
         const pair = new Link(undefined, [keyLink, valueLink]);
         parts.push(pair);
       }
-      // If this object has an ID, use format: (object obj_id (key val) ...)
-      // This avoids parser bugs with the `: ` syntax
+      // If this object has an ID, use self-reference format: (obj_id: object (key val) ...)
       if (this._encodeMemo.has(obj)) {
         const refId = this._encodeMemo.get(obj);
-        return new Link(undefined, [new Link(ObjectCodec.TYPE_OBJECT), new Link(refId), ...parts]);
+        return new Link(refId, [new Link(ObjectCodec.TYPE_OBJECT), ...parts]);
       } else {
         // Wrap in a type marker for objects without IDs: (object (key val) ...)
         return new Link(undefined, [new Link(ObjectCodec.TYPE_OBJECT), ...parts]);
@@ -324,6 +322,12 @@ export class ObjectCodec {
         return link.id;
       }
       return null;
+    }
+
+    // Check if this link has a self-reference ID (format: obj_0: type ...)
+    let selfRefId = null;
+    if (link.id && link.id.startsWith('obj_')) {
+      selfRefId = link.id;
     }
 
     // Get the type marker from the first value
@@ -400,10 +404,13 @@ export class ObjectCodec {
     }
 
     if (typeMarker === ObjectCodec.TYPE_ARRAY) {
-      // Check if second element is an obj_id: (array obj_id item1 item2 ...)
+      // New format with self-reference: (obj_0: array item1 item2 ...)
+      // Old format (for backward compatibility): (array obj_id item1 item2 ...)
       let startIdx = 1;
-      let arrayId = null;
-      if (link.values.length > 1) {
+      let arrayId = selfRefId;  // Use self-reference ID from link.id if present
+
+      // Check for old format with obj_id as second element
+      if (!arrayId && link.values.length > 1) {
         const second = link.values[1];
         if (second && second.id && second.id.startsWith('obj_')) {
           arrayId = second.id;
@@ -425,10 +432,13 @@ export class ObjectCodec {
     }
 
     if (typeMarker === ObjectCodec.TYPE_OBJECT) {
-      // Check if second element is an obj_id: (object obj_id (key val) ...)
+      // New format with self-reference: (obj_0: object (key val) ...)
+      // Old format (for backward compatibility): (object obj_id (key val) ...)
       let startIdx = 1;
-      let objectId = null;
-      if (link.values.length > 1) {
+      let objectId = selfRefId;  // Use self-reference ID from link.id if present
+
+      // Check for old format with obj_id as second element
+      if (!objectId && link.values.length > 1) {
         const second = link.values[1];
         if (second && second.id && second.id.startsWith('obj_')) {
           objectId = second.id;
