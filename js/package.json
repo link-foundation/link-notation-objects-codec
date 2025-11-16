@@ -25,7 +25,7 @@
     "url": "https://github.com/link-foundation/link-notation-objects-codec.git"
   },
   "dependencies": {
-    "links-notation": "^0.6.0"
+    "links-notation": "^0.11.0"
   },
   "engines": {
     "node": ">=18.0.0"
