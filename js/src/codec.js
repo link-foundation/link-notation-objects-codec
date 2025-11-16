@@ -2,7 +2,7 @@
  * Object encoder/decoder for Links Notation format.
  */
 
-import { Parser, Link, LinksGroup } from 'links-notation';
+import { Parser, Link } from 'links-notation';
 
 /**
  * Codec for encoding/decoding JavaScript objects to/from Links Notation.
@@ -50,8 +50,8 @@ export class ObjectCodec {
     this._encodeCounter = 0;
 
     const link = this._encodeValue(obj);
-    const group = new LinksGroup([link]);
-    return group.format();
+    // Use the Link's format method directly
+    return link.format();
   }
 
   /**
