@@ -1,6 +1,10 @@
 # link-notation-objects-codec (JavaScript)
 
-A JavaScript library to encode/decode objects to/from Links Notation format. This library provides universal serialization and deserialization for JavaScript objects, with built-in support for circular references and complex object graphs.
+A comprehensive JavaScript library for working with Links Notation format. This library provides:
+- Universal serialization/deserialization for JavaScript objects with circular reference support
+- JSON to Links Notation conversion utilities (from [follow project](https://github.com/konard/follow))
+- Q&A database functionality with file operations and locking (from [hh-job-application-automation](https://github.com/konard/hh-job-application-automation))
+- Fuzzy matching utilities for string comparison
 
 ## Features
 
@@ -13,6 +17,10 @@ A JavaScript library to encode/decode objects to/from Links Notation format. Thi
 - **Object Identity**: Maintain object identity for shared references
 - **UTF-8 Support**: Full Unicode string support using base64 encoding
 - **Simple API**: Easy-to-use `encode()` and `decode()` functions
+- **JSON/Lino Conversion**: Convert between JSON and Links Notation with `jsonToLino()` and `linoToJson()`
+- **File Operations**: Save and load data in Links Notation format
+- **Q&A Database**: Store and retrieve question-answer pairs with concurrent access support
+- **Fuzzy Matching**: Find similar strings with Levenshtein distance and keyword similarity
 
 ## Installation
 
@@ -174,9 +182,11 @@ This approach allows for:
 
 ## API Reference
 
-### `encode(obj)`
+### Typed Object Codec
 
-Encode a JavaScript object to Links Notation format.
+#### `encode(obj)`
+
+Encode a JavaScript object to Links Notation format with type markers.
 
 **Parameters:**
 - `obj` - The JavaScript object to encode
@@ -187,7 +197,7 @@ Encode a JavaScript object to Links Notation format.
 **Throws:**
 - `TypeError` - If the object type is not supported
 
-### `decode(notation)`
+#### `decode(notation)`
 
 Decode Links Notation format to a JavaScript object.
 
@@ -197,11 +207,9 @@ Decode Links Notation format to a JavaScript object.
 **Returns:**
 - Reconstructed JavaScript object
 
-### `ObjectCodec`
+#### `ObjectCodec`
 
 The main codec class that performs encoding and decoding. The module-level `encode()` and `decode()` functions use a shared instance of this class.
-
-If you need isolated encoding contexts (for example, in multi-threaded environments), you can create your own codec instances:
 
 ```javascript
 import { ObjectCodec } from 'link-notation-objects-codec';
@@ -210,6 +218,108 @@ const codec = new ObjectCodec();
 const encoded = codec.encode({ data: [1, 2, 3] });
 const decoded = codec.decode(encoded);
 ```
+
+### LinksNotationManager
+
+A manager class for JSON/Lino conversion and file operations.
+
+```javascript
+import { LinksNotationManager, lino } from 'link-notation-objects-codec';
+
+// Use the singleton instance
+const data = { name: 'Alice', age: 30 };
+const linoStr = lino.jsonToLino(data);
+// Output: ((name Alice) (age 30))
+
+const backToJson = lino.linoToJson(linoStr);
+// Output: { name: 'Alice', age: 30 }
+
+// File operations
+lino.saveJsonAsLino('config.lino', data);
+const loaded = lino.loadJsonFromLino('config.lino');
+
+// Create custom instance with different storage directory
+const custom = new LinksNotationManager({ storageDir: '/custom/path' });
+```
+
+**Key Methods:**
+- `jsonToLino(json)` - Convert JSON to Links Notation
+- `linoToJson(lino)` - Convert Links Notation to JSON
+- `saveAsLino(filename, values)` - Save array values to file
+- `loadFromLino(filename)` - Load and parse a file
+- `saveJsonAsLino(filename, data)` - Save JSON data as Links Notation
+- `loadJsonFromLino(filename)` - Load file as JSON
+- `escapeReference(value)` - Escape a string for Links Notation
+
+### Q&A Database
+
+Create a Q&A database with file-based storage and concurrent access support.
+
+```javascript
+import { createQADatabase } from 'link-notation-objects-codec';
+
+const qaDB = createQADatabase('/path/to/qa.lino');
+
+// Add or update entries
+await qaDB.addOrUpdateQA('What is your name?', 'My name is Assistant');
+
+// Get answers
+const answer = await qaDB.getAnswer('What is your name?');
+// Output: 'My name is Assistant'
+
+// Get all entries
+const allQA = await qaDB.getAllQA();
+
+// Delete an entry
+await qaDB.deleteQA('What is your name?');
+```
+
+**Features:**
+- Automatic file locking for concurrent access
+- Multiline answer support
+- Special character handling (colons, parentheses, quotes)
+- Unicode/Cyrillic support
+
+### Fuzzy Matching Utilities
+
+Find similar strings using edit distance and keyword similarity.
+
+```javascript
+import {
+  levenshteinDistance,
+  stringSimilarity,
+  findBestMatch,
+  findAllMatches,
+  extractKeywords,
+} from 'link-notation-objects-codec';
+
+// Calculate edit distance
+const distance = levenshteinDistance('hello', 'hallo'); // 1
+
+// Calculate similarity (0-1)
+const similarity = stringSimilarity('hello', 'hallo'); // 0.8
+
+// Find best matching question in a database
+const qaDatabase = new Map([
+  ['What is your name?', 'Claude'],
+  ['How old are you?', 'Unknown'],
+]);
+
+const match = findBestMatch('What is your age?', qaDatabase, { threshold: 0.3 });
+// Returns: { question: 'How old are you?', answer: 'Unknown', score: 0.xx }
+
+// Find all matches above threshold
+const matches = findAllMatches('What is your name?', qaDatabase, { threshold: 0.3 });
+```
+
+**Functions:**
+- `levenshteinDistance(a, b)` - Edit distance between strings
+- `stringSimilarity(a, b)` - Normalized similarity (0-1)
+- `normalizeQuestion(question)` - Normalize text for comparison
+- `extractKeywords(question, options)` - Extract meaningful keywords
+- `keywordSimilarity(a, b, options)` - Keyword overlap similarity
+- `findBestMatch(question, database, options)` - Find best matching entry
+- `findAllMatches(question, database, options)` - Find all matches above threshold
 
 ## Development
 
