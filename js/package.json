@@ -36,7 +36,7 @@
     "url": "https://github.com/link-foundation/lino-objects-codec.git"
   },
   "dependencies": {
-    "links-notation": "^0.16.1"
+    "links-notation": "^0.19.0"
   },
   "engines": {
     "node": ">=22.11.0"
